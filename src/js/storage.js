@@ -585,9 +585,11 @@ BadgerStorage.prototype = {
       for (let tracker_fqdn in mapData) {
         var firstPartyOrigins = mapData[tracker_fqdn];
         for (let origin in firstPartyOrigins) {
+          // TODO migrate tracking details if present
           badger.heuristicBlocking.updateTrackerPrevalence(
             tracker_fqdn,
             firstPartyOrigins[origin],
+            false, // TODO switch to an "opts" parameter containing all the optional stuff
             true // skip DNT policy checking on data import
           );
         }

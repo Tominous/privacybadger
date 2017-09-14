@@ -141,8 +141,13 @@ HeuristicBlocker.prototype = {
     }
 
     // check if there are tracking cookies
-    if (hasCookieTracking(details, origin)) {
-      self._recordPrevalence(fqdn, origin, tab_origin);
+    let tracking = hasCookieTracking(details, origin);
+    if (tracking) {
+      // save URLs for debugging
+      tracking.url = details.url;
+      tracking.pageUrl = tabURLs[details.tabId];
+
+      self._recordPrevalence(fqdn, origin, tab_origin, tracking);
       return {};
     }
 
@@ -242,10 +247,22 @@ HeuristicBlocker.prototype = {
           // our threshold, record the tracking action and exit the function.
           let entropy = utils.estimateMaxEntropy(s);
           if (entropy > TRACKER_ENTROPY_THRESHOLD) {
+
+            let trackingInfo = {
+              type: 'pixelcookieshare',
+              url: request_url,
+              pageUrl: tab_url,
+              data: {
+                arg: value,
+                cookie: cookie.value,
+                substring: s
+              }
+            };
+
             log("Found high-entropy cookie share from", tab_origin, "to", request_fqdn,
               ":", entropy, "bits\n  cookie:", cookie.name, '=', cookie.value,
               "\n  arg:", key, "=", value, "\n  substring:", s);
-            this._recordPrevalence(request_fqdn, request_origin, tab_origin);
+            this._recordPrevalence(request_fqdn, request_origin, tab_origin, trackingInfo);
             return;
           }
         }
@@ -259,10 +276,11 @@ HeuristicBlocker.prototype = {
    * @param {String} tracker_fqdn The fully qualified domain name of the tracker
    * @param {String} page_origin The base domain of the page
    *   where the tracker was detected.
-   * @param {Boolean} skip_dnt_check Skip DNT policy checking if flag is true.
+   * @param {Object} tracking TODO document
+   * @param {Boolean} [skip_dnt_check] Skip DNT policy checking if flag is true.
    *
    */
-  updateTrackerPrevalence: function(tracker_fqdn, page_origin, skip_dnt_check) {
+  updateTrackerPrevalence: function(tracker_fqdn, page_origin, tracking, skip_dnt_check) {
     // abort if we already made a decision for this fqdn
     let action = this.storage.getAction(tracker_fqdn);
     if (action != constants.NO_TRACKING && action != constants.ALLOW) {
@@ -273,6 +291,7 @@ HeuristicBlocker.prototype = {
       tracker_fqdn,
       window.getBaseDomain(tracker_fqdn),
       page_origin,
+      tracking,
       skip_dnt_check
     );
   },
@@ -290,13 +309,19 @@ HeuristicBlocker.prototype = {
    * @param {String} tracker_origin Base domain of the third party tracker
    * @param {String} page_origin The origin of the page where the third party
    *   tracker was loaded.
-   * @param {Boolean} skip_dnt_check Skip DNT policy checking if flag is true.
+   * @param {Object} trackingDetails TODO document
+   * @param {Boolean} [skip_dnt_check] Skip DNT policy checking if flag is true
    */
-  _recordPrevalence: function (tracker_fqdn, tracker_origin, page_origin, skip_dnt_check) {
+  _recordPrevalence: function (tracker_fqdn, tracker_origin, page_origin, trackingDetails, skip_dnt_check) {
     var snitchMap = this.storage.getBadgerStorageObject('snitch_map');
     var firstParties = [];
     if (snitchMap.hasItem(tracker_origin)) {
       firstParties = snitchMap.getItem(tracker_origin);
+    }
+
+    // TODO CONTINUE HERE
+    if (trackingDetails) {
+      console.log(JSON.stringify(trackingDetails, null, 2));
     }
 
     if (firstParties.indexOf(page_origin) != -1) {
@@ -324,10 +349,8 @@ HeuristicBlocker.prototype = {
     this.storage.setupHeuristicAction(tracker_fqdn, constants.ALLOW);
     this.storage.setupHeuristicAction(tracker_origin, constants.ALLOW);
 
-    // Blocking based on outbound cookies
-    var httpRequestPrevalence = firstParties.length;
-
     // block the origin if it has been seen on multiple first party domains
+    var httpRequestPrevalence = firstParties.length;
     if (httpRequestPrevalence >= constants.TRACKING_THRESHOLD) {
       log('blacklisting origin', tracker_fqdn);
       this.blacklistOrigin(tracker_origin, tracker_fqdn);
@@ -659,7 +682,12 @@ function hasCookieTracking(details, origin) {
       let value = cookie[name].toLowerCase();
 
       if (!(value in lowEntropyCookieValues)) {
-        return true;
+        return {
+          type: 'cookie',
+          data: {
+            [name]: cookie[name]
+          }
+        };
       }
 
       estimatedEntropy += lowEntropyCookieValues[value];
@@ -669,7 +697,10 @@ function hasCookieTracking(details, origin) {
   log("All cookies for " + origin + " deemed low entropy...");
   if (estimatedEntropy > constants.MAX_COOKIE_ENTROPY) {
     log("But total estimated entropy is " + estimatedEntropy + " bits, so blocking");
-    return true;
+    return {
+      type: 'cookie',
+      data: cookies
+    };
   }
 
   return false;
